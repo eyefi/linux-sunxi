@@ -491,6 +491,26 @@ static ssize_t axp20_regs_store(struct device *dev,
 	return count;
 }
 
+uint8_t pek_events = 0;
+static ssize_t axp20_pekevent_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+    uint8_t val = pek_events;
+    pek_events = 0;
+	return sprintf(buf,"%x\n", val);
+}
+
+static ssize_t axp20_pekevent_store(struct device *dev,
+				struct device_attribute *attr, const char *buf, size_t count)
+{
+    uint8_t val;
+        // only 1's matters so no need to write back current values
+    val = (uint8_t) (buf[0] & 0x06);
+    axp_write(dev, POWER20_INTSTS5, val);
+	return 0;
+}
+
+
 static struct device_attribute axp20_mfd_attrs[] = {
 	AXP_MFD_ATTR(axp20_offvol),
 	AXP_MFD_ATTR(axp20_noedelay),
@@ -499,6 +519,7 @@ static struct device_attribute axp20_mfd_attrs[] = {
 	AXP_MFD_ATTR(axp20_peken),
 	AXP_MFD_ATTR(axp20_pekdelay),
 	AXP_MFD_ATTR(axp20_pekclose),
+	AXP_MFD_ATTR(axp20_pekevent),
 	AXP_MFD_ATTR(axp20_ovtemclsen),
 	AXP_MFD_ATTR(axp20_reg),
 	AXP_MFD_ATTR(axp20_regs),

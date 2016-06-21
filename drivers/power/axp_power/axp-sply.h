@@ -306,7 +306,7 @@ const unsigned int AXP19_NOTIFIER_ON = 		AXP19_IRQ_USBOV |
 
 #define AXP20_INTTEMP							(0x5E)
 
-const unsigned int AXP20_NOTIFIER_ON = 		//AXP20_IRQ_USBOV |
+const uint64_t AXP20_NOTIFIER_ON = 		//AXP20_IRQ_USBOV |
 											AXP20_IRQ_USBIN |
 				        					AXP20_IRQ_USBRE |
 				       						//AXP20_IRQ_USBLO |
@@ -320,8 +320,9 @@ const unsigned int AXP20_NOTIFIER_ON = 		//AXP20_IRQ_USBOV |
 				       						AXP20_IRQ_PEKLO |
 				       						AXP20_IRQ_PEKSH |
 				       						AXP20_IRQ_CHAST	|
+				       						AXP20_IRQ_PEKFE |
+				       						AXP20_IRQ_PEKRE |
 				       						AXP20_IRQ_CHAOV;
-
 
 
 #define AXP_CHG_ATTR(_name)					\
@@ -416,6 +417,9 @@ struct axp_charger {
 
 	/*ic temperature*/
 	int ic_temp;
+
+    /* PEK event - falling/rising edge */
+    uint8_t pek_event;
 
 	/*irq*/
 	struct notifier_block nb;

@@ -37,7 +37,7 @@
 #include "axp-cfg.h"
 #include "axp-sply.h"
 
-#define DBG_AXP_PSY 0
+#define DBG_AXP_PSY 1
 #if  DBG_AXP_PSY
 #define DBG_PSY_MSG(format,args...)   printk("[AXP]"format,##args)
 #else
@@ -156,6 +156,9 @@ static void axp_charger_update_state(struct axp_charger *charger)
  	charger->charge_on = ((val[0] >> 7) & 0x01);
 }
 
+#define AXP209_TEMPMON_MIN  1447
+#define AXP209_0C_TO_K  2731
+
 static void axp_charger_update(struct axp_charger *charger)
 {
   uint16_t tmp;
@@ -176,9 +179,10 @@ static void axp_charger_update(struct axp_charger *charger)
   tmp = charger->adc->iusb_res;
   charger->iusb = axp20_iusb_to_mA(tmp);
   axp_reads(charger->master,AXP20_INTTEMP,2,val);
-  //DBG_PSY_MSG("TEMPERATURE:val1=0x%x,val2=0x%x\n",val[1],val[0]);
-  tmp = (val[0] << 4 ) + (val[1] & 0x0F);
-  charger->ic_temp = (int) tmp  - 1447;
+  DBG_PSY_MSG("TEMPERATURE:val1=0x%x,val2=0x%x\n",val[1],val[0]);
+  tmp = (val[0] << 4 ) | (val[1] & 0x0F);
+  // min temp is -144.7C so we start at 1447
+  charger->ic_temp = (int)tmp - 1447;
   if(!charger->ext_valid){
   	charger->disvbat =  charger->vbat;
   	charger->disibat =  charger->ibat;
@@ -370,8 +374,8 @@ static int axp_battery_get_property(struct power_supply *psy,
     val->intval = charger->bat_det;
     break;
   case POWER_SUPPLY_PROP_TEMP:
-    //val->intval = charger->ic_temp - 200;
-    val->intval =  300;
+    val->intval = charger->ic_temp;
+    //val->intval =  300;
     break;
   default:
     ret = -EINVAL;
@@ -442,11 +446,11 @@ static int axp_usb_get_property(struct power_supply *psy,
 
 static void axp_change(struct axp_charger *charger)
 {
-  DBG_PSY_MSG("battery state change\n");
-  axp_charger_update_state(charger);
-  axp_charger_update(charger);
-  flag_state_change = 1;
-  power_supply_changed(&charger->batt);
+        DBG_PSY_MSG("battery state change\n");
+        axp_charger_update_state(charger);
+        axp_charger_update(charger);
+        flag_state_change = 1;
+        power_supply_changed(&charger->batt);
 }
 
 static void axp_presslong(struct axp_charger *charger)
@@ -460,14 +464,33 @@ static void axp_presslong(struct axp_charger *charger)
 	input_sync(powerkeydev);
 }
 
+static void axp_press_up(struct axp_charger *charger)
+{
+    extern uint8_t pek_events;
+    input_report_key(powerkeydev, KEY_UP, 1);
+    input_report_key(powerkeydev, KEY_DOWN, 0);
+    input_sync(powerkeydev);
+    pek_events |= 0x20;
+}
+
+static void axp_press_down(struct axp_charger *charger)
+{
+    extern uint8_t pek_events;
+	input_report_key(powerkeydev, KEY_DOWN, 1);
+    input_report_key(powerkeydev, KEY_UP, 0);
+	input_sync(powerkeydev);
+    pek_events |= 0x40;
+}
+
+
 static void axp_pressshort(struct axp_charger *charger)
 {
 	DBG_PSY_MSG("press short\n");
-  input_report_key(powerkeydev, KEY_POWER, 1);
-  input_sync(powerkeydev);
-  msleep(100);
-  input_report_key(powerkeydev, KEY_POWER, 0);
-  input_sync(powerkeydev);
+        input_report_key(powerkeydev, KEY_POWER, 1);
+        input_sync(powerkeydev);
+        msleep(100);
+        input_report_key(powerkeydev, KEY_POWER, 0);
+        input_sync(powerkeydev);
 }
 
 static void axp_capchange(struct axp_charger *charger)
@@ -504,11 +527,12 @@ static void axp_close(struct axp_charger *charger)
 }
 
 
-static int axp_battery_event(struct notifier_block *nb, unsigned long event,
+static int axp_battery_event(struct notifier_block *nb, unsigned int val,
         void *data)
 {
     struct axp_charger *charger =
     container_of(nb, struct axp_charger, nb);
+    uint64_t event = val;
 
     uint8_t w[9];
 
@@ -520,7 +544,12 @@ static int axp_battery_event(struct notifier_block *nb, unsigned long event,
     w[5] = POWER20_INTSTS4;
     w[6] = (uint8_t) ((event >> 24) & 0xFF);
     w[7] = POWER20_INTSTS5;
-    w[8] = (uint8_t) (((uint64_t) event >> 32) & 0xFF);
+    //w[8] = (uint8_t) ((event >> 32) & 0xFF);
+
+    // The notifier call chain only passes a 32 bit value.  Instead of 
+    // changing the operation, read the interrupt status.
+    axp_read(charger->master, POWER20_INTSTS5, &w[8]);
+    event |= ((uint64_t)w[8]) << 32;
 
     if(event & (AXP20_IRQ_BATIN|AXP20_IRQ_BATRE)) {
     	axp_capchange(charger);
@@ -536,6 +565,18 @@ static int axp_battery_event(struct notifier_block *nb, unsigned long event,
     	axp_clr_bits(charger->master,0x32,0x38);
     }
 
+    if(event & AXP20_IRQ_PEKFE) {
+        DBG_PSY_MSG("PEKFE: press down: %x\n", w[8]);
+    	axp_press_down(charger);
+    	axp_write(charger->master,POWER20_INTSTS5, 0x20);
+    }
+
+    if(event & AXP20_IRQ_PEKRE) {
+        DBG_PSY_MSG("PEKRE: press up: %x\n", w[8]);
+    	axp_press_up(charger);
+    	axp_write(charger->master,POWER20_INTSTS5, 0x40);
+    }
+
     if(event & AXP20_IRQ_PEKLO) {
     	axp_presslong(charger);
     }
@@ -544,7 +585,7 @@ static int axp_battery_event(struct notifier_block *nb, unsigned long event,
     	axp_pressshort(charger);
     }
 
-    DBG_PSY_MSG("event = 0x%x\n",(int) event);
+    DBG_PSY_MSG("event = 0x%llx\n",  (event & 0xffffffffffLL));
     axp_writes(charger->master,POWER20_INTSTS1,9,w);
 
     return 0;
